@@ -1,13 +1,16 @@
 #include "db_ops.h"
+// 字体颜色
+#define COLOR_RED     "\x1b[31m"
+#define COLOR_GREEN   "\x1b[32m"
+#define COLOR_YELLOW  "\x1b[33m"
 sqlite3* sqliteInit_chatMessageDB(){
     sqlite3 *chatMessageDB;
     // 打开数据库,没有数据库的话则创建数据库
     int chatMessageDBret = sqlite3_open(CHATMESSAGESQLITE_PATH,&chatMessageDB);
     if(chatMessageDBret != SQLITE_OK){
-        printf("INFO::无法打开%s数据库: %s\n",CHATMESSAGESQLITE_PATH,sqlite3_errmsg(chatMessageDB));
+        printf(COLOR_RED"INFO::Cannot open the %s database: %s\n",CHATMESSAGESQLITE_PATH,sqlite3_errmsg(chatMessageDB));
         return NULL;
     }
-    printf("INFO::成功打开%s数据库\n",CHATMESSAGESQLITE_PATH);
     // 创建聊天记录的sql语句
     const char *sql = 
         "CREATE TABLE IF NOT EXISTS messages ("
@@ -20,12 +23,13 @@ sqlite3* sqliteInit_chatMessageDB(){
         char *err_msg = NULL;
     int rc = sqlite3_exec(chatMessageDB, sql, 0, 0, &err_msg);
     if (rc != SQLITE_OK) {
-        printf("INFO::创建表失败: %s\n", err_msg);
+        printf(COLOR_RED"INFO::Failed to create table: %s\n", err_msg);
         sqlite3_free(err_msg);
         sqlite3_close(chatMessageDB);
         return NULL;
     }
-    printf("INFO::成功创建/确认 messages 表\n");
+    printf(COLOR_GREEN"INFO::Successfully opened the '%s' database\n",CHATMESSAGESQLITE_PATH);
+
     return chatMessageDB;
 }
 
