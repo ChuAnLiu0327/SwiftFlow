@@ -242,10 +242,40 @@ int main()
                 } else {
                     // [状态 2] 已登录：正常业务处理
                     printf(COLOR_GREEN"[Msg from %s] %s", client->username, buffer);
-                    // 这里可以做任何事，比如通过哈希表给另一个用户发消息
-                    // 转发消息,或者也可以将聊天记录存在数据库中
-                    const char *echo = "Server received your msg.\n";
-                    write(sock_fd, echo, strlen(echo));
+                    cJSON *root = cJSON_Parse(buffer);
+                    if (root == NULL) { // 解析失败
+                        const char *err = "Error: Invalid JSON format!\n";
+                        write(sock_fd, err, strlen(err));
+                        continue;
+                    }
+                    cJSON *to = cJSON_GetObjectItem(root,"to");
+                    cJSON *msg = cJSON_GetObjectItem(root,"msg");
+
+                    if (to == NULL || msg == NULL || !cJSON_IsString(to) || !cJSON_IsString(msg)) { // 字段缺失/类型错误
+                        const char *err = "Error: JSON missing 'to'/'msg' field or field is not string!\n";
+                        write(sock_fd, err, strlen(err));
+                        cJSON_Delete(root);
+                        continue;
+                    }
+                    const char *target_account = to->valuestring;
+                    const char *message = msg->valuestring;
+                    // 通过target_account查找目标的文件描述符
+                    int target_sock = find_user_sockfd(target_account);
+                    if(target_sock != -1){
+                        char message_buffer[1024];
+                        snprintf(message_buffer,sizeof(message_buffer),COLOR_GREEN"[%s]: %s\n",client->username,message);
+                        write(target_sock,message_buffer,strlen(message_buffer));
+                        printf(COLOR_GREEN"FROM:[%s] TO:[%s] MSG:[%s]\n",client->username,target_account,message);
+                    }else{
+                        // 发送失败,可能没用户或者用户不在线
+                        printf(COLOR_RED"FROM:[%s] TO:[%s] MSG:[%s] ,The target users are not online\n",client->username,target_account,message);
+                        char erro[1024];
+                        snprintf(erro,sizeof(erro),"The target user '%s' does not exist or is not online.\n",target_account);
+                        write(client->fd,erro,strlen(erro));
+                    }
+                    // 存到数据库中
+                    insert_messagee(chatMessageDB,client->username,target_account,message);
+                    cJSON_Delete(root);
                 }
             }
         }
