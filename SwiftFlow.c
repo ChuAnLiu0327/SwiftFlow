@@ -11,7 +11,7 @@
 #include "uthash.h"
 #include <cjson/cJSON.h>
 
-#define PORT 10000      
+#define PORT 50000      
 #define MAX_EVENTS 10    
 #define BUFFER_SIZE 1024  
 #define ACCOUNT_SIZE 64
@@ -113,6 +113,22 @@ void remove_user_by_sockfd(int sockfd) {
             printf(COLOR_GREEN"INFO::User %s has been removed from the online list.\n", user->account);
             free(user);
             break;
+        }
+    }
+}
+
+// 群发消息给所有在线用户（排除发送者自己）
+void broadcast_message(const char* sender, const char* message) {
+    online_user_t *user, *tmp;
+    char send_buffer[1024];
+    snprintf(send_buffer, sizeof(send_buffer), "[Broadcast from %s] %s", sender, message);
+    
+    // 遍历哈希表所有在线用户
+    HASH_ITER(hh, online_users, user, tmp) {
+        // 排除发送者自己
+        if (strcmp(user->account, sender) != 0) {
+            write(user->sockfd, send_buffer, strlen(send_buffer));
+            printf(COLOR_GREEN"BROADCAST FROM:[%s] TO:[%s] MSG:[%s]\n", sender, user->account, message);
         }
     }
 }
@@ -221,7 +237,8 @@ int main()
                     continue;
                 }
                 // --- 核心业务逻辑分支 ---
-                if (client->is_logged_in == 0) {
+                if (client->is_logged_in == 0) 
+                {
                     // [状态 1] 未登录：认为这条消息是登录请求
                     // 简单协议解析：假设消息格式是 "LOGIN:xxx"
                     if (strncmp(buffer, "LOGIN:", 6) == 0) {
@@ -248,35 +265,70 @@ int main()
                         write(sock_fd, err, strlen(err));
                         continue;
                     }
-                    cJSON *to = cJSON_GetObjectItem(root,"to");
-                    cJSON *msg = cJSON_GetObjectItem(root,"msg");
 
-                    if (to == NULL || msg == NULL || !cJSON_IsString(to) || !cJSON_IsString(msg)) { // 字段缺失/类型错误
-                        const char *err = "Error: JSON missing 'to'/'msg' field or field is not string!\n";
+                    // 解析并校验all字段
+                    cJSON *all = cJSON_GetObjectItem(root,"all");
+                    int is_broadcast = 0; // 默认私发
+                    if(all !=NULL){
+                        if(!cJSON_IsBool(all)){
+                            const char *err = "Error: 'all' field must be boolean!\n";
+                            write(sock_fd, err, strlen(err));
+                            cJSON_Delete(root);
+                            continue;
+                        }
+                        is_broadcast = cJSON_IsTrue(all);
+                    }
+
+                    // 解析并校验 msg 字段
+                    cJSON *msg = cJSON_GetObjectItem(root, "msg");
+                    if (msg == NULL || !cJSON_IsString(msg)) {
+                        const char *err = "Error: JSON missing 'msg' field or field is not string!\n";
                         write(sock_fd, err, strlen(err));
                         cJSON_Delete(root);
                         continue;
                     }
-                    const char *target_account = to->valuestring;
                     const char *message = msg->valuestring;
-                    // 通过target_account查找目标的文件描述符
-                    int target_sock = find_user_sockfd(target_account);
-                    if(target_sock != -1){
-                        char message_buffer[1024];
-                        snprintf(message_buffer,sizeof(message_buffer),COLOR_GREEN"[%s]: %s\n",client->username,message);
-                        write(target_sock,message_buffer,strlen(message_buffer));
-                        printf(COLOR_GREEN"FROM:[%s] TO:[%s] MSG:[%s]\n",client->username,target_account,message);
+
+                    if(is_broadcast)
+                    {
+                        // 群发的逻辑
+                        broadcast_message(client->username,message);
+                        // 保存群发记录到数据库
+                        insert_messagee(chatMessageDB,client->username,"all",message);
+                        // 给发送者反馈
+                        char success[1024];
+                        snprintf(success,sizeof(success),"Broadcast success! Message: %s\n",message);
+                        write(sock_fd,success,strlen(success));
                     }else{
-                        // 发送失败,可能没用户或者用户不在线
-                        printf(COLOR_RED"FROM:[%s] TO:[%s] MSG:[%s] ,The target users are not online\n",client->username,target_account,message);
-                        char erro[1024];
-                        snprintf(erro,sizeof(erro),"The target user '%s' does not exist or is not online.\n",target_account);
-                        write(client->fd,erro,strlen(erro));
+                        // 还是私发的逻辑
+                        cJSON *to = cJSON_GetObjectItem(root,"to");
+                        if(to == NULL || !cJSON_IsString(to)){
+                            const char *err = "Error: JSON missing 'to' field or field is not string!\n";
+                            write(sock_fd, err, strlen(err));
+                            cJSON_Delete(root);
+                            continue;
+                        }
+                        const char *target_account = to->valuestring;
+                        // 查找文件描述符
+                        // 通过target_account查找目标的文件描述符
+                        int target_sock = find_user_sockfd(target_account);
+                        if(target_sock != -1){
+                            char message_buffer[1024];
+                            snprintf(message_buffer,sizeof(message_buffer),"%s",message);
+                            write(target_sock,message_buffer,strlen(message_buffer));
+                            printf(COLOR_GREEN"FROM:[%s] TO:[%s] MSG:[%s]\n",client->username,target_account,message);
+                        }else{
+                            // 发送失败或者用户不在线
+                            printf(COLOR_RED"FROM:[%s] TO:[%s] MSG:[%s] ,The target users are not online\n",client->username,target_account,message);
+                            char erro[1024];
+                            snprintf(erro,sizeof(erro),"The target user '%s' does not exist or is not online.\n",target_account);
+                            write(client->fd,erro,strlen(erro));
+                        }
+                        // 存到数据库中
+                        insert_messagee(chatMessageDB,client->username,target_account,message);
                     }
-                    // 存到数据库中
-                    insert_messagee(chatMessageDB,client->username,target_account,message);
-                    cJSON_Delete(root);
-                }
+                    cJSON_Delete(root);  
+                }  
             }
         }
     }
